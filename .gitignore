@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+# Raw Bluetooth captures can contain pairing keys and the Instant Readout key.
+# Commit only make_fixture.py output.
+*.log
+btsnoop*
+.DS_Store
