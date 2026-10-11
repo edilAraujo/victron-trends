@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 
@@ -39,6 +40,12 @@ CREDIT_STEP = 0x41
 
 REPLY_TIMEOUT = 3.0
 TRIES = 3
+
+# BlueZ doesn't always answer a pending GATT call when the link drops: a StartNotify
+# sent just before the device disconnected was seen never to return. Every stage
+# after connect is therefore bounded, and ends early if the device disconnects.
+SETUP_TIMEOUT = 15.0   # notifications plus the handshake, normally ~2 s
+PULL_TIMEOUT = 300.0   # a whole store, normally ~15 s for ~500 blocks
 
 
 class BleSession:
@@ -115,13 +122,34 @@ class BleSession:
         return await self._request(reg, encode_set(reg, payload), accept)
 
 
+async def until_lost(coro, lost: asyncio.Event, timeout: float):
+    """Await coro, but raise ConnectionError if `lost` is set first, or TimeoutError after `timeout` s."""
+    task = asyncio.ensure_future(coro)
+    waiter = asyncio.ensure_future(lost.wait())
+    try:
+        done, _ = await asyncio.wait({task, waiter}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        waiter.cancel()
+    if task in done:
+        return task.result()
+    task.cancel()
+    with contextlib.suppress(BaseException):
+        await task
+    if lost.is_set():
+        raise ConnectionError("device disconnected")
+    raise TimeoutError(f"no result after {timeout:.0f} s")
+
+
 async def pull_device(address: str, attempts: int = 1, now: int | None = None) -> dict:
     """Connect to a device, read its Trends store, and disconnect.
 
-    Only failed connection attempts are retried. A failure mid-session raises.
+    Failed connections and failed session setups (the device dropping the link
+    right after connecting, or BlueZ not answering) are retried, up to `attempts`
+    in all. A failure once the pull has started raises.
     """
     for attempt in range(1, attempts + 1):
-        client = BleakClient(address, timeout=20)
+        lost = asyncio.Event()
+        client = BleakClient(address, timeout=20, disconnected_callback=lambda _client: lost.set())
         try:
             await client.connect()
         except (BleakError, TimeoutError, OSError) as exc:
@@ -131,13 +159,20 @@ async def pull_device(address: str, attempts: int = 1, now: int | None = None) -
             continue
         try:
             session = BleSession(client)
-            await session.start()
+            try:
+                await until_lost(session.start(), lost, SETUP_TIMEOUT)
+            except (BleakError, TimeoutError, ConnectionError, OSError) as exc:
+                log.warning("session setup attempt %d of %d failed: %s", attempt, attempts, exc or type(exc).__name__)
+                if attempt < attempts:
+                    await asyncio.sleep(3)
+                continue
             started = time.monotonic()
-            result = await pull(session, now=now)
+            result = await until_lost(pull(session, now=now), lost, PULL_TIMEOUT)
             log.info("read %d blocks in %.1f s (%d lost requests re-sent)",
                      len(result["blocks"]), time.monotonic() - started, session.resends)
         finally:
-            await client.disconnect()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(client.disconnect(), SETUP_TIMEOUT)
         result["address"] = address
         return result
-    raise ConnectionError(f"could not connect to {address} in {attempts} attempts")
+    raise ConnectionError(f"could not connect to {address} and start a session in {attempts} attempts")
