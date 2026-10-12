@@ -96,3 +96,17 @@ def test_until_lost():
         with pytest.raises(ConnectionError):
             await ble.until_lost(slow(), lost, 5)
     asyncio.run(run())
+
+
+def test_adapter_is_passed_to_bleak(fake):
+    seen = []
+
+    class Recording(FakeClient):
+        def __init__(self, address, timeout=20, disconnected_callback=None, **kw):
+            seen.append(kw)
+            super().__init__(address, timeout, disconnected_callback)
+    ble.BleakClient = Recording
+    fake.script = ["ok", "ok"]
+    asyncio.run(asyncio.wait_for(ble.pull_device("AA:BB", adapter="hci1"), 5))
+    asyncio.run(asyncio.wait_for(ble.pull_device("AA:BB"), 5))
+    assert seen == [{"bluez": {"adapter": "hci1"}}, {}]

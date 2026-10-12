@@ -26,7 +26,7 @@ def write_json(result: dict, path: str | None) -> None:
 def cmd_pull(args) -> None:
     from .ble import pull_device  # needs bleak
 
-    write_json(asyncio.run(pull_device(args.address, attempts=args.attempts)), args.output)
+    write_json(asyncio.run(pull_device(args.address, attempts=args.attempts, adapter=args.adapter)), args.output)
 
 
 def cmd_replay(args) -> None:
@@ -62,6 +62,8 @@ def main(argv=None) -> None:
     p.add_argument("address", help="device Bluetooth address (or a CoreBluetooth UUID on macOS)")
     p.add_argument("-o", "--output", help="output file (default: stdout)")
     p.add_argument("--attempts", type=int, default=5, help="connection attempts (default: 5)")
+    p.add_argument("--adapter", help="Bluetooth adapter on Linux, e.g. hci1 (default: BlueZ's default); "
+                                     "the device must be paired with it")
     p.set_defaults(run=cmd_pull)
 
     p = sub.add_parser("replay", help="run the reader against a VictronConnect session in a btsnoop capture")

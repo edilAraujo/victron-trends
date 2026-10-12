@@ -140,8 +140,11 @@ async def until_lost(coro, lost: asyncio.Event, timeout: float):
     raise TimeoutError(f"no result after {timeout:.0f} s")
 
 
-async def pull_device(address: str, attempts: int = 1, now: int | None = None) -> dict:
+async def pull_device(address: str, attempts: int = 1, now: int | None = None, adapter: str | None = None) -> dict:
     """Connect to a device, read its Trends store, and disconnect.
+
+    adapter picks the Bluetooth adapter on Linux ("hci1"); None uses BlueZ's default.
+    The device must be paired with that adapter: pairings belong to an adapter's address.
 
     Failed connections and failed session setups (the device dropping the link
     right after connecting, or BlueZ not answering) are retried, up to `attempts`
@@ -149,7 +152,8 @@ async def pull_device(address: str, attempts: int = 1, now: int | None = None) -
     """
     for attempt in range(1, attempts + 1):
         lost = asyncio.Event()
-        client = BleakClient(address, timeout=20, disconnected_callback=lambda _client: lost.set())
+        client = BleakClient(address, timeout=20, disconnected_callback=lambda _client: lost.set(),
+                             **({"bluez": {"adapter": adapter}} if adapter else {}))
         try:
             await client.connect()
         except (BleakError, TimeoutError, OSError) as exc:
