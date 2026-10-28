@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "victron-trends"
-version = "0.1.2"
+version = "0.1.3"
 description = "Read the Trends history stored on Victron SmartShunts and SmartSolar chargers over BLE"
 readme = "README.md"
 license = "MIT"

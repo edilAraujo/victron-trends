@@ -59,6 +59,7 @@ class BleSession:
         self.granted = 0
         self.last_keepalive = 0.0
         self.resends = 0
+        self.control = b""  # what the control characteristic read at session start
 
     def _on_notify(self, _char, data: bytearray) -> None:
         # The two register characteristics form one stream: messages span both.
@@ -67,6 +68,12 @@ class BleSession:
             self.replies.put_nowait(message)
 
     async def start(self) -> None:
+        # Read the control characteristic first, as VictronConnect does. A device sizes the
+        # chunks of its replies from this read (it answers 00 04 00 01 de 4a 00; 4a = 74 =
+        # ATT MTU 77 - 3). A SmartSolar that had just powered up and wasn't read first
+        # answered with nothing but empty notifications on 306b0004, about 400 a second;
+        # once read, it answered normally until it next lost power.
+        self.control = bytes(await self.client.read_gatt_char(UUID_CONTROL))
         await self.client.start_notify(UUID_CONTROL, lambda _char, _data: None)
         for uuid in (UUID_REGISTERS, UUID_REGISTERS_2):
             await self.client.start_notify(uuid, self._on_notify)

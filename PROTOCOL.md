@@ -27,7 +27,9 @@ Without both of these, the device stops answering partway through a download.
 - **Flow control on `306b0002`.** The client's `f9 80` at session start lets the device send 128 notifications on the register channel. Each `f9 41` from the client allows 65 more. When the allowance runs out the device goes silent but keeps the link open. VictronConnect sends `f9 41` after every 65 notifications. The device sends `f9 01` on `306b0002` (meaning *unconfirmed*).
 - **Keep-alive.** SET register 0x93 to 10000 (`06 00 82 18 93 42 10 27`). The device drops the link about 10 s after the last one, so VictronConnect re-sends it at least every 3.5 s.
 
-The session starts with `fa 80 ff` and `f9 80` on `306b0002`, then `01`, `03 00` and the keep-alive (followed by `03 01 03 03`) on `306b0003`. [patlux/ve-smart-telemetry](https://github.com/patlux/ve-smart-telemetry)'s static analysis of the app names `fa 80 ff` as `writeCborChunkSize(0x80, 0xff)`. The other bytes are copied as-is; their meaning is unknown.
+The session starts with a **read of `306b0002`**, then `fa 80 ff` and `f9 80` on `306b0002`, then `01`, `03 00` and the keep-alive (followed by `03 01 03 03`) on `306b0003`. [patlux/ve-smart-telemetry](https://github.com/patlux/ve-smart-telemetry)'s static analysis of the app names `fa 80 ff` as `writeCborChunkSize(0x80, 0xff)`, `01` as `getDevices()` and `03 n` as `subscribe(instance n)`. The other bytes are copied as-is.
+
+**The read is required after a device powers up.** It answers `00 04 00 01 de 4a 00` (both SmartShunts and the SmartSolar here); the last field, 74, is the largest notification at MTU 77, and the app parses the rest as session limits. A SmartSolar MPPT 100/50 that had just powered up, and was sent the handshake without the read, answered `01` with nothing but empty notifications on `306b0004`, about 400 a second, and never a value; it still acted on writes (each one got an `f9 01`, and keep-alives held the link). One read fixed it, and later sessions worked with or without the read until the device next lost power. VictronConnect always reads, so it never sees this. The reader in this repository reads at the start of every session. (Observed 2026-10-28: the MPPT stuck for 4 days after a power-up, fixed by one VictronConnect connection, then stuck again after a deliberate power cycle and fixed by the read alone.)
 
 After the handshake the device also pushes unrequested values about once a second (0xEC5A clock, 0xED8D voltage, 0x0308), so replies have to be matched by register.
 
@@ -45,7 +47,7 @@ Messages are a 2-byte prefix followed by CBOR items:
 - Register ids are CBOR unsigned integers: `19 EC 5B` is 0xEC5B, small ids use `18 xx`.
 - Values are CBOR byte strings: `40`–`57` carry the length inline, `58 LL` a 1-byte length. Integers inside them are little-endian.
 - These are VE.Direct registers: 0xED8D is battery voltage, 0xED8C battery current. The lifetime history values (0x03xx) use the same framing.
-- `<sub>` is `03` for all Trends traffic. Its meaning is *unconfirmed*.
+- `<sub>` is `03` for all Trends traffic. patlux's analysis has it as an instance number (the handshake's `03 03` subscribes to instance 3; the keep-alive goes to instance 0). *Unconfirmed* beyond that.
 - STATUS values seen: `3` for a plain GET of a cursor register (0xEC5B, 0xEC63, 0xEC64), which the app sends after each cursor write and ignores; `-5` for unsupported registers (0xEC4E–51 and 0xEC56–59 on a SmartShunt); `1` for 0xEC5C. Exact meanings are *unconfirmed*.
 - **Writing a cursor register is the request.** The device answers the SET with a VALUE carrying the selected page or block. No GET is needed.
 
@@ -127,7 +129,7 @@ A segment with no sync can't be placed, but none was seen: the app syncs within 
 
 ## 6. Reading procedure
 
-1. Subscribe to notifications on all three characteristics and merge `306b0003`/`306b0004` into one stream. Send the handshake (1.1), then keep flow control and the keep-alive going for the whole session.
+1. Read `306b0002`. Subscribe to notifications on all three characteristics and merge `306b0003`/`306b0004` into one stream. Send the handshake (1.1), then keep flow control and the keep-alive going for the whole session.
 2. GET 0xEC5A, 0xEC5D, then 0xEC4A + n and 0xEC52 + n for each series.
 3. SET 0xEC63 = current clock; the reply is the first page. Repeat with cursor = oldest counter returned − 1 until a page holds fewer than 8 entries. Same for 0xEC64, 16 per page.
 4. For each series and tier: start at the tier's head from 0xEC52 + n. SET 0xEC5B `(series, ts, samples_per_block)` and take the block from the reply, then `ts -= samples_per_block * interval`. Stop when the tier is covered, a block comes back short or empty, or a block has a different interval: that means the request ran past the tier and the device answered from the next coarser one.
@@ -156,7 +158,7 @@ Times are the phone's local time.
 ## 9. Open questions
 
 - Whether bonding is required. Every device here was paired first. [trevore/victron-ble-gatt](https://github.com/trevore/victron-ble-gatt) reports reading other registers on a SmartSolar and a BMV-712 without pairing.
-- STATUS code meanings, the `<sub>` byte, and the handshake bytes `01`, `03 00` and `03 01 03 03`.
+- STATUS code meanings, and the first five bytes of the control read (`00 04 00 01 de`).
 - What SmartShunt series 1 (0xEC86) and SmartSolar series 0 and 3 (0xEC89, 0xEC88) record.
 - 0xEC5C, which answers with status 1.
 - Why the app requests one sample past each tier's head.

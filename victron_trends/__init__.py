@@ -8,4 +8,4 @@ from .decode import SERIES, Sample, finest
 from .reader import pull, pull_samples
 
 __all__ = ["SERIES", "Sample", "finest", "pull", "pull_samples"]
-__version__ = "0.1.0"
+__version__ = "0.1.3"

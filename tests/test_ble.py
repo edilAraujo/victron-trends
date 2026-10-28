@@ -21,12 +21,18 @@ class FakeClient:
         self.behaviour = FakeClient.script.pop(0)
         self.on_disconnect = disconnected_callback
         self.disconnected = False
+        self.calls = []
         FakeClient.made.append(self)
 
     async def connect(self):
         return True
 
+    async def read_gatt_char(self, uuid):
+        self.calls.append(("read", uuid))
+        return bytearray.fromhex("00040001de4a00")
+
     async def start_notify(self, uuid, callback):
+        self.calls.append(("notify", uuid))
         if self.behaviour == "drop":
             asyncio.get_running_loop().call_later(0.05, self.on_disconnect, self)
             await asyncio.Event().wait()
@@ -34,7 +40,7 @@ class FakeClient:
             await asyncio.Event().wait()
 
     async def write_gatt_char(self, uuid, data, response=False):
-        pass
+        self.calls.append(("write", uuid, bytes(data).hex()))
 
     async def disconnect(self):
         self.disconnected = True
@@ -78,6 +84,15 @@ def test_gives_up_after_the_attempts_instead_of_hanging(fake):
     with pytest.raises(ConnectionError, match="3 attempts"):
         asyncio.run(asyncio.wait_for(ble.pull_device("AA:BB", attempts=3), 5))
     assert all(c.disconnected for c in fake.made)
+
+
+def test_session_reads_control_before_anything_else(fake):
+    # A SmartSolar just powered up sends only empty notifications unless this read comes first
+    fake.script = ["ok"]
+    asyncio.run(asyncio.wait_for(ble.pull_device("AA:BB"), 5))
+    calls = fake.made[0].calls
+    assert calls[0] == ("read", ble.UUID_CONTROL)
+    assert ("write", ble.UUID_CONTROL, "fa80ff") in calls
 
 
 def test_until_lost():
